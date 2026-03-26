@@ -1,0 +1,31 @@
+:80 {
+  encode gzip
+
+  handle /api/* {
+    reverse_proxy server:8000
+  }
+
+  handle_path /onlyoffice/* {
+    reverse_proxy onlyoffice:80
+  }
+
+  handle /web-apps/* {
+    reverse_proxy onlyoffice:80
+  }
+  handle /sdkjs/* {
+    reverse_proxy onlyoffice:80
+  }
+  handle /fonts/* {
+    reverse_proxy onlyoffice:80
+  }
+  handle /cache/* {
+    reverse_proxy onlyoffice:80
+  }
+  handle /healthcheck {
+    reverse_proxy onlyoffice:80
+  }
+
+  handle {
+    reverse_proxy web:3000
+  }
+}

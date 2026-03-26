@@ -1,0 +1,21 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    init: true
+    command: sleep infinity
+    volumes:
+      - ..:/workspace/project:cached
+      - /var/run/docker.sock:/var/run/docker.sock
+      - dev_pip_cache:/home/vscode/.cache/pip
+      - dev_npm_cache:/home/vscode/.npm
+    environment:
+      - APP_DATA_DIR=/mnt/d/app-data
+      - APP_TMP_DIR=/mnt/d/app-data/tmp
+      - APP_LOG_DIR=/mnt/d/app-data/logs
+    working_dir: /workspace/project
+
+volumes:
+  dev_pip_cache:
+  dev_npm_cache:

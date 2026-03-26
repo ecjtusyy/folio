@@ -1,0 +1,114 @@
+name: monorepo-app
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      # ✅ FIX: use named volume to avoid chmod/chown "Operation not permitted" on bind mounts
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  minio:
+    image: minio/minio:RELEASE.2024-07-31T05-46-26Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ${APP_DATA_DIR}/minio:/data
+    ports:
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  onlyoffice:
+    build:
+      context: ./onlyoffice
+    environment:
+      - JWT_ENABLED=false
+    volumes:
+      - ${APP_DATA_DIR}/onlyoffice:/var/lib/onlyoffice
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/healthcheck"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  server:
+    build:
+      context: ../server
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      ADMIN_USERNAME: ${ADMIN_USERNAME}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      SESSION_EXPIRE_HOURS: ${SESSION_EXPIRE_HOURS}
+      FILE_TOKEN_TTL_SECONDS: ${FILE_TOKEN_TTL_SECONDS}
+      PYTHONPATH: /app
+      # ✅ container paths must be absolute
+      APP_DATA_DIR: /app-data
+      APP_TMP_DIR: /app-data/tmp
+      APP_LOG_DIR: /app-data/logs
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      ONLYOFFICE_INTERNAL_URL: ${ONLYOFFICE_INTERNAL_URL}
+      INTERNAL_SERVER_BASE_URL: ${INTERNAL_SERVER_BASE_URL}
+    volumes:
+      # host paths stay under deploy/ via .env (APP_DATA_DIR=./app-data)
+      - ${APP_DATA_DIR}/tmp:/app-data/tmp
+      - ${APP_DATA_DIR}/logs:/app-data/logs
+      - ${CACHE_DIR}/pip:/root/.cache/pip
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  web:
+    build:
+      context: ../web
+    environment:
+      SERVER_API_BASE_URL: ${SERVER_API_BASE_URL}
+    depends_on:
+      server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  caddy:
+    build:
+      context: .
+      dockerfile: caddy.Dockerfile
+    ports:
+      - "${CADDY_HTTP_PORT:-80}:80"
+    depends_on:
+      server:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+      onlyoffice:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

@@ -1,0 +1,1929 @@
+Binary file testdata/sample_md_with_assets.zip added
+
+Binary file testdata/sample_tex_multipage.zip added
+
+--- /dev/null
++++ web/scripts/copy-pdfjs.mjs
+@@ -0,0 +1,33 @@
++import { cpSync, existsSync, mkdirSync, rmSync } from 'fs';
+
++import { join, dirname } from 'path';
+
++import { fileURLToPath } from 'url';
+
++
+
++const __dirname = dirname(fileURLToPath(import.meta.url));
+
++const root = join(__dirname, '..');
+
++
+
++const srcBase = join(root, 'node_modules', 'pdfjs-dist');
+
++const dstBase = join(root, 'public', 'pdfjs');
+
++
+
++function resetDir(p) {
+
++  if (existsSync(p)) rmSync(p, { recursive: true, force: true });
+
++  mkdirSync(p, { recursive: true });
+
++}
+
++
+
++function copyDir(src, dst) {
+
++  if (!existsSync(src)) throw new Error(`missing ${src}`);
+
++  mkdirSync(dirname(dst), { recursive: true });
+
++  cpSync(src, dst, { recursive: true });
+
++}
+
++
+
++try {
+
++  resetDir(dstBase);
+
++  copyDir(join(srcBase, 'build'), join(dstBase, 'build'));
+
++  copyDir(join(srcBase, 'web'), join(dstBase, 'web'));
+
++  // optional assets used by viewer
+
++  if (existsSync(join(srcBase, 'cmaps'))) copyDir(join(srcBase, 'cmaps'), join(dstBase, 'cmaps'));
+
++  if (existsSync(join(srcBase, 'standard_fonts'))) copyDir(join(srcBase, 'standard_fonts'), join(dstBase, 'standard_fonts'));
+
++  console.log('[postinstall] copied pdfjs-dist assets to public/pdfjs');
+
++} catch (e) {
+
++  console.error('[postinstall] failed to copy pdfjs assets:', e);
+
++  process.exit(1);
+
++}
+
+
+--- deploy/verify_m3.sh
++++ deploy/verify_m3.sh
+@@ -12,63 +12,108 @@
+ TD="$(cd ../testdata && pwd)"
+
+ 
+
+ dc() { docker compose "$@"; }
+
+-must_in() { [[ " $2 " == *" $1 "* ]] || { echo "Expected $2 got $1"; exit 1; }; }
+
++must_in() { [[ " $2 " == *" $1 "* ]] || { echo "Expected one of: $2 but got: $1"; exit 1; }; }
+
++
+
++json_login="$(jq -n --arg u "${ADMIN_USERNAME}" --arg p "${ADMIN_PASSWORD}" '{username:$u,password:$p}')"
+
+ 
+
+ echo "[M3] login"
+
+-c=$(curl -s -o /dev/null -w "%{http_code}" -c "$COOKIE" -H 'Content-Type: application/json'   -d "{"username":"${ADMIN_USERNAME}","password":"${ADMIN_PASSWORD}"}"   "${BASE}/api/auth/login")
+
++c=$(curl -s -o /dev/null -w "%{http_code}" -c "$COOKIE" -H 'Content-Type: application/json' -d "$json_login" "${BASE}/api/auth/login")
+
+ must_in "$c" "200"
+
+ 
+
+-echo "[M3] import md private"
+
+-mdp=$(curl -s -b "$COOKIE" -F "file=@${TD}/sample.md;type=text/markdown" -F "visibility=private" -F "title=md-private"   "${BASE}/api/imports")
+
++# ensure pypdf exists in server container (for PDF page counting)
+
++echo "[M3] check pypdf in server container"
+
++dc exec -T server python -c "import pypdf; print('pypdf_ok')" >/dev/null
+
++
+
++echo "[M3] import md(zip) private (with local assets)"
+
++mdp=$(curl -s -b "$COOKIE" \
+
++  -F "file=@${TD}/sample_md_with_assets.zip;type=application/zip" \
+
++  -F "visibility=private" \
+
++  -F "title=mdzip-private" \
+
++  "${BASE}/api/imports")
+
+ mdpid=$(echo "$mdp" | jq -r '.id'); test -n "$mdpid"
+
+ 
+
++# private access control
+
+ cna=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}/api/library/${mdpid}")
+
+ must_in "$cna" "401 403"
+
+ 
+
+-ca=$(curl -s -o /dev/null -w "%{http_code}" -b "$COOKIE" "${BASE}/api/library/${mdpid}")
+
+-must_in "$ca" "200"
+
++# extract rewritten image url from content_md
+
++img_url=$(echo "$mdp" | jq -r '.content_md' | grep -oE '/api/files/[0-9a-fA-F-]+/download' | head -n 1 || true)
+
++test -n "$img_url"
+
+ 
+
+-echo "[M3] import md public"
+
+-mdg=$(curl -s -b "$COOKIE" -F "file=@${TD}/sample.md;type=text/markdown" -F "visibility=public" -F "title=md-public"   "${BASE}/api/imports")
+
+-mdgid=$(echo "$mdg" | jq -r '.id'); test -n "$mdgid"
+
+-cok=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}/api/library/${mdgid}")
+
+-must_in "$cok" "200"
+
++echo "[M3] md(zip) image should require auth when private"
+
++cimg_unauth=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}${img_url}")
+
++must_in "$cimg_unauth" "401 403"
+
+ 
+
+-echo "[M3] onlyoffice health"
+
+-txt="$(curl -s "${BASE}/onlyoffice/healthcheck" | tr -d '\r\n')"
+
+-[ "$txt" = "true" ] || [ "$txt" = "True" ] || { echo "onlyoffice health not true: $txt"; exit 1; }
+
++cimg_auth=$(curl -s -o /dev/null -w "%{http_code}" -b "$COOKIE" "${BASE}${img_url}")
+
++must_in "$cimg_auth" "200"
+
+ 
+
+-echo "[M3] import docx"
+
+-dx=$(curl -s -b "$COOKIE" -F "file=@${TD}/sample.docx;type=application/vnd.openxmlformats-officedocument.wordprocessingml.document"   -F "visibility=private" -F "title=docx-private"   "${BASE}/api/imports")
+
+-dxfile=$(echo "$dx" | jq -r '.source_file_id'); test -n "$dxfile"
+
++echo "[M3] md(zip) switch to public and verify unauth can read"
+
++json_pub="$(jq -n --arg v "public" '{visibility:$v}')"
+
++curl -s -b "$COOKIE" -H 'Content-Type: application/json' -d "$json_pub" -X PUT "${BASE}/api/imports/${mdpid}" >/dev/null
+
+ 
+
+-urlj=$(curl -s -b "$COOKIE" "${BASE}/api/onlyoffice/document-url/${dxfile}")
+
+-docurl=$(echo "$urlj" | jq -r '.document_url'); test -n "$docurl"
+
++cpub=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}/api/library/${mdpid}")
+
++must_in "$cpub" "200"
+
+ 
+
+-echo "[M3] docker exec onlyoffice curl -I"
+
+-hc=$(dc exec -T onlyoffice curl -s -o /dev/null -w "%{http_code}" -I "$docurl")
+
+-must_in "$hc" "200"
+
++cimg_pub=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}${img_url}")
+
++must_in "$cimg_pub" "200"
+
+ 
+
+-echo "[M3] import tex zip"
+
+-tx=$(curl -s -b "$COOKIE" -F "file=@${TD}/sample_tex.zip;type=application/zip" -F "visibility=private" -F "title=tex-private"   "${BASE}/api/imports")
+
+-txid=$(echo "$tx" | jq -r '.id'); pdfid=$(echo "$tx" | jq -r '.rendered_file_id')
+
+-test -n "$txid"; test -n "$pdfid"
+
++echo "[M3] import tex(zip) private (multipage)"
+
++texr=$(curl -s -b "$COOKIE" \
+
++  -F "file=@${TD}/sample_tex_multipage.zip;type=application/zip" \
+
++  -F "visibility=private" \
+
++  -F "title=tex-multipage-private" \
+
++  "${BASE}/api/imports")
+
++texid=$(echo "$texr" | jq -r '.id'); test -n "$texid"
+
++pdfid=$(echo "$texr" | jq -r '.rendered_file_id'); test -n "$pdfid"
+
+ 
+
+-c0=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}/api/files/${pdfid}/download")
+
+-must_in "$c0" "401 403"
+
++# private access control
+
++cna=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}/api/library/${texid}")
+
++must_in "$cna" "401 403"
+
+ 
+
+-hdr=$(curl -s -D - -o /dev/null -b "$COOKIE" "${BASE}/api/files/${pdfid}/download")
+
+-echo "$hdr" | head -n 1 | grep -q "200"
+
+-echo "$hdr" | tr -d '\r' | grep -i -q '^content-type: *application/pdf'
+
++cpdf_unauth=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}/api/files/${pdfid}/download")
+
++must_in "$cpdf_unauth" "401 403"
+
+ 
+
+-echo "[M3] toggle import to public"
+
+-upd=$(curl -s -b "$COOKIE" -X PUT -H 'Content-Type: application/json' -d '{"visibility":"public"}' "${BASE}/api/imports/${txid}")
+
+-echo "$upd" | jq -e '.visibility=="public"' >/dev/null
+
++echo "[M3] download compiled pdf (auth) and assert pages>=2"
+
++curl -s -b "$COOKIE" "${BASE}/api/files/${pdfid}/download" | \
+
++  dc exec -T server python - <<'PY'
+
++import io, sys
+
++from pypdf import PdfReader
+
++data = sys.stdin.buffer.read()
+
++r = PdfReader(io.BytesIO(data))
+
++pages = len(r.pages)
+
++print("pages=", pages)
+
++assert pages >= 2, f"expected >=2 pages, got {pages}"
+
++PY
+
+ 
+
+-c1=$(curl -s -o /dev/null -w "%{http_code}" -I "${BASE}/api/files/${pdfid}/download")
+
+-must_in "$c1" "200"
+
++echo "[M3] viewer route should be PDF.js viewer (200 + marker)"
+
++cview=$(curl -s -o /dev/null -w "%{http_code}" -b "$COOKIE" "${BASE}/viewer/pdf/${pdfid}")
+
++must_in "$cview" "200"
+
++curl -s -b "$COOKIE" "${BASE}/viewer/pdf/${pdfid}" | grep -q "/pdfjs/web/viewer.html?file="
+
+ 
+
+-cv=$(curl -s -o /dev/null -w "%{http_code}" -I "${BASE}/viewer/pdf/${pdfid}")
+
+-must_in "$cv" "200 301 302"
+
++echo "[M3] switch tex import to public and verify unauth can read pdf"
+
++curl -s -b "$COOKIE" -H 'Content-Type: application/json' -d "$json_pub" -X PUT "${BASE}/api/imports/${texid}" >/dev/null
+
+ 
+
+-echo "[M3] PASS"
+
++cpub=$(curl -s -o /dev/null -w "%{http_code}" "${BASE}/api/library/${texid}")
+
++must_in "$cpub" "200"
+
++
+
++hdr="$(curl -s -I "${BASE}/api/files/${pdfid}/download" | tr -d '\r')"
+
++echo "$hdr" | grep -qi "200"
+
++echo "$hdr" | grep -qi "content-type: application/pdf"
+
++
+
++echo "[M3] import docx (onlyoffice internal fetch)"
+
++docx=$(curl -s -b "$COOKIE" \
+
++  -F "file=@${TD}/sample.docx;type=application/vnd.openxmlformats-officedocument.wordprocessingml.document" \
+
++  -F "visibility=private" \
+
++  -F "title=docx-private" \
+
++  "${BASE}/api/imports")
+
++docx_file_id=$(echo "$docx" | jq -r '.source_file_id'); test -n "$docx_file_id"
+
++
+
++# get internal document.url for onlyoffice to fetch
+
++docurl=$(curl -s -b "$COOKIE" "${BASE}/api/onlyoffice/document-url/${docx_file_id}" | jq -r '.document_url')
+
++test -n "$docurl"
+
++
+
++echo "[M3] onlyoffice container should curl document.url 200"
+
++# docurl is internal (http://server:8000/...) so must be executed in onlyoffice container
+
++dc exec -T onlyoffice curl -s -I "$docurl" | tr -d '\r' | grep -q "200"
+
++
+
++echo "[M3] ok"
+
+
+--- docs/验收指南.md
++++ docs/验收指南.md
+@@ -1,5 +1,7 @@
+ # 验收指南
+
++
+
+ 按顺序执行：
+
++
+
+ ```bash
+
+ cd project
+
+ mkdir -p /mnt/d/app-data /mnt/d/app-data/tmp /mnt/d/app-data/logs
+
+@@ -8,5 +10,39 @@
+ bash deploy/verify_all.sh
+
+ ```
+
+ 
+
+-testdata:
+
+-- sample.md / sample.png / sample.docx / sample_tex.zip
+
++## 新增验收点（M3：高保真导入展示）
+
++
+
++### 1) PDF.js 多页 Viewer
+
++- 路由：`/viewer/pdf/[file_id]`
+
++- 实现方式：页面 iframe 内嵌官方 `pdfjs-dist` 的 `viewer.html`，并通过同源受控 URL 加载 PDF：
+
++  - `viewer.html?file=<encodeURIComponent(/api/files/{id}/download?token=...)>`
+
++- 目标：支持滚动浏览多页、翻页/缩放/页码等基本能力（不再只渲染第一页）。
+
++
+
++### 2) Markdown(zip) 导入规范（md + 本地资源保真）
+
++支持两种导入方式：
+
++1. **单个 `.md`**：仅当 Markdown 内 **没有任何相对路径资源引用** 时允许导入；否则返回 400，并提示上传 zip。
+
++2. **`.zip`（推荐）**：包含 1 个 Markdown 主文件 + 图片/资源目录（保持相对路径）。导入时将：
+
++   - 选择主 Markdown：
+
++     - 优先 `main.md`；否则 zip 内只有 1 个 `.md` 则使用；若多个则报错并返回候选列表
+
++   - 解析并收集本地资源引用（至少覆盖）：
+
++     - 行内图片 `![](./images/a.png)`
+
++     - reference-style 图片 `![alt][id]` + `[id]: ./images/a.png`
+
++     - HTML `<img src="./images/a.png">`
+
++   - 对所有相对路径资源：从 zip 解压目录读取对应文件，上传到 MinIO，生成受控访问 URL
+
++   - 重写 Markdown 中的路径为受控 URL（保证页面渲染时图片可显示）
+
++   - 若发现引用了 zip 内不存在的本地资源：导入失败并返回缺失列表，避免悄悄丢图
+
++   - 远程图片（http/https/data:）保持原链接不动
+
++
+
++### 3) TeX(zip) 主文件自动识别
+
++- 若 zip 根目录存在 `main.tex`：优先使用（兼容旧逻辑）
+
++- 若不存在 `main.tex`：
+
++  - zip 内仅 1 个 `.tex`：使用它
+
++  - 多个 `.tex`：选择同时包含 `\documentclass` 与 `\begin{document}` 的那个
+
++  - 若仍不唯一：导入失败，返回候选 tex 列表，并允许通过表单字段 `main_tex=paper.tex` 指定主文件
+
++
+
++## testdata
+
++
+
++- `sample_tex_multipage.zip`：TeX 编译后应至少 2 页（验收脚本会断言页数 >= 2）
+
++- `sample_md_with_assets.zip`：包含 `doc.md` + `images/a.png`，Markdown 中用相对路径引用图片；导入后应能通过重写后的 URL curl 200 拿到图片
+
++- 保留原有：`sample.md / sample.png / sample.docx / sample_tex.zip`
+
++
+
+
+--- server/alembic/versions/0001_init.py
++++ server/alembic/versions/0001_init.py
+@@ -52,6 +52,7 @@
+         sa.Column("visibility", sa.String(length=20), nullable=False),
+
+         sa.Column("source_file_id", postgresql.UUID(as_uuid=True), nullable=False),
+
+         sa.Column("rendered_file_id", postgresql.UUID(as_uuid=True), nullable=True),
+
++        sa.Column("asset_file_ids", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+
+         sa.Column("title", sa.String(length=200), nullable=False),
+
+         sa.Column("content_md", sa.Text(), nullable=True),
+
+         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+
+
+--- server/app/models.py
++++ server/app/models.py
+@@ -50,6 +50,8 @@
+     visibility: Mapped[str] = mapped_column(String(20), nullable=False)
+
+     source_file_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+
+     rendered_file_id: Mapped[uuid.UUID|None] = mapped_column(UUID(as_uuid=True), nullable=True)
+
++    # for md(zip) assets etc. stored as list of file_id strings (uuid text) in JSONB
+
++    asset_file_ids: Mapped[list[str]|None] = mapped_column(JSONB, nullable=True)
+
+     title: Mapped[str] = mapped_column(String(200), nullable=False)
+
+     content_md: Mapped[str|None] = mapped_column(Text, nullable=True)
+
+     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+--- server/app/routers/imports.py
++++ server/app/routers/imports.py
+@@ -1,8 +1,22 @@
+ from __future__ import annotations
+
+-import hashlib, os, uuid
+
++
+
++import hashlib
+
++import io
+
++import mimetypes
+
++import os
+
++import posixpath
+
++import re
+
++import shutil
+
++import tempfile
+
++import uuid
+
++import zipfile
+
++from pathlib import Path
+
++from urllib.parse import urlsplit
+
++
+
+ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+
+ from sqlalchemy import select
+
+ from sqlalchemy.orm import Session
+
++
+
+ from ..auth import get_current_admin
+
+ from ..config import settings
+
+ from ..db import get_db
+
+@@ -10,9 +24,14 @@
+ from ..storage import put_bytes
+
+ from ..tex import TexCompileError, compile_tex_zip
+
+ 
+
+-router=APIRouter(prefix="/api/imports", tags=["imports"])
+
+-router_public=APIRouter(prefix="/api/public/imports", tags=["public-imports"])
+
+-router_library=APIRouter(prefix="/api/library", tags=["library"])
+
++router = APIRouter(prefix="/api/imports", tags=["imports"])
+
++router_public = APIRouter(prefix="/api/public/imports", tags=["public-imports"])
+
++router_library = APIRouter(prefix="/api/library", tags=["library"])
+
++
+
++INLINE_IMG_RE = re.compile(r"(!\[[^\]]*\]\()([^\)]+)(\))")
+
++REF_IMG_RE = re.compile(r"!\[([^\]]*)\]\[([^\]]*)\]")
+
++REF_DEF_RE = re.compile(r"^\s*\[([^\]]+)\]:\s*(\S+)(.*)$", re.M)
+
++HTML_IMG_RE = re.compile(r"(<img\b[^>]*?\bsrc=)([\"\'])([^\"\']+)(\2)", re.I)
+
+ 
+
+ def _out(a: ImportAsset):
+
+     return {
+
+@@ -22,110 +41,374 @@
+         "title": a.title,
+
+         "source_file_id": str(a.source_file_id),
+
+         "rendered_file_id": str(a.rendered_file_id) if a.rendered_file_id else None,
+
++        "asset_file_ids": a.asset_file_ids or [],
+
+         "content_md": a.content_md,
+
+         "created_at": a.created_at,
+
+     }
+
+ 
+
+ def _store(db: Session, data: bytes, filename: str, owner_scope: str, kind: str, mime: str) -> FileObject:
+
+-    sha=hashlib.sha256(data).hexdigest()
+
+-    key=f"imports/{uuid.uuid4().hex}_{os.path.basename(filename)}"
+
++    sha = hashlib.sha256(data).hexdigest()
+
++    key = f"imports/{uuid.uuid4().hex}_{os.path.basename(filename)}"
+
+     put_bytes(data, key, mime)
+
+-    fo=FileObject(owner_scope=owner_scope, kind=kind, bucket=settings.minio_bucket, object_key=key, mime=mime, size=len(data), sha256=sha)
+
++    fo = FileObject(owner_scope=owner_scope, kind=kind, bucket=settings.minio_bucket, object_key=key, mime=mime, size=len(data), sha256=sha)
+
+     db.add(fo); db.commit(); db.refresh(fo)
+
+     return fo
+
+ 
+
++def _is_remote_url(u: str) -> bool:
+
++    u = u.strip()
+
++    return u.startswith("http://") or u.startswith("https://") or u.startswith("data:") or u.startswith("//")
+
++
+
++def _is_local_ref(u: str) -> bool:
+
++    u = u.strip()
+
++    if not u:
+
++        return False
+
++    if _is_remote_url(u):
+
++        return False
+
++    if u.startswith("/"):
+
++        return False
+
++    # other schemes like mailto:
+
++    if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", u):
+
++        return False
+
++    return True
+
++
+
++def _parse_inline_target(raw: str) -> tuple[str, str]:
+
++    """return (url, rest) where rest includes optional title."""
+
++    s = raw.strip()
+
++    if s.startswith("<") and ">" in s:
+
++        end = s.find(">")
+
++        url = s[1:end]
+
++        rest = s[end+1:].strip()
+
++        return url, rest
+
++    parts = s.split()
+
++    if not parts:
+
++        return "", ""
+
++    url = parts[0]
+
++    rest = " ".join(parts[1:]).strip()
+
++    return url, rest
+
++
+
++def _select_main_md(zip_names: list[str]) -> str:
+
++    mds = [n for n in zip_names if n.lower().endswith(".md") and not n.endswith("/")]
+
++    # prefer main.md (anywhere)
+
++    for n in mds:
+
++        if posixpath.basename(n).lower() == "main.md":
+
++            return n
+
++    if len(mds) == 1:
+
++        return mds[0]
+
++    if len(mds) == 0:
+
++        raise HTTPException(status_code=400, detail={"error":"no_md_found_in_zip"})
+
++    raise HTTPException(status_code=400, detail={"error":"multiple_md_found", "candidates": sorted(mds)})
+
++
+
++def _resolve_zip_path(md_path_in_zip: str, ref: str) -> str:
+
++    """resolve relative ref -> normalized zip path (posix)."""
+
++    ref = ref.strip()
+
++    split = urlsplit(ref)
+
++    p = split.path or ""
+
++    p = p.replace("\\", "/")
+
++    base_dir = posixpath.dirname(md_path_in_zip)
+
++    joined = posixpath.normpath(posixpath.join(base_dir, p))
+
++    if joined.startswith("..") or joined.startswith("/"):
+
++        raise HTTPException(status_code=400, detail={"error":"invalid_relative_path", "path": ref})
+
++    return joined
+
++
+
++def _collect_local_refs(md_text: str) -> tuple[set[str], dict[str,str]]:
+
++    """return (inline_and_html_urls, ref_defs)"""
+
++    urls: set[str] = set()
+
++    # inline images
+
++    for m in INLINE_IMG_RE.finditer(md_text):
+
++        raw = m.group(2)
+
++        url, _rest = _parse_inline_target(raw)
+
++        if _is_local_ref(url):
+
++            urls.add(url)
+
++    # html images
+
++    for m in HTML_IMG_RE.finditer(md_text):
+
++        url = m.group(3).strip()
+
++        if _is_local_ref(url):
+
++            urls.add(url)
+
++
+
++    # reference-style images: collect used keys then resolve definitions
+
++    used_keys: set[str] = set()
+
++    for m in REF_IMG_RE.finditer(md_text):
+
++        alt = m.group(1).strip()
+
++        key = m.group(2).strip() or alt
+
++        if key:
+
++            used_keys.add(key)
+
++
+
++    ref_defs: dict[str,str] = {}
+
++    for m in REF_DEF_RE.finditer(md_text):
+
++        key = m.group(1).strip()
+
++        url = m.group(2).strip()
+
++        if url.startswith("<") and url.endswith(">"):
+
++            url = url[1:-1]
+
++        ref_defs[key] = url
+
++
+
++    for k in used_keys:
+
++        u = ref_defs.get(k)
+
++        if u and _is_local_ref(u):
+
++            urls.add(u)
+
++
+
++    return urls, ref_defs
+
++
+
++def _rewrite_md_with_assets(db: Session, job_dir: Path, md_path_in_zip: str, md_text: str, visibility: str) -> tuple[str, list[str]]:
+
++    local_urls, _ref_defs = _collect_local_refs(md_text)
+
++
+
++    # resolve and validate first (avoid partial uploads)
+
++    resolved_map: dict[str, list[str]] = {}
+
++    missing: list[str] = []
+
++    for u in sorted(local_urls):
+
++        resolved = _resolve_zip_path(md_path_in_zip, u)
+
++        full = job_dir / resolved
+
++        if not full.exists() or not full.is_file():
+
++            missing.append(u)
+
++            continue
+
++        resolved_map.setdefault(resolved, []).append(u)
+
++
+
++    if missing:
+
++        raise HTTPException(status_code=400, detail={"error":"missing_resources", "missing": missing})
+
++
+
++    resolved_to_url: dict[str, str] = {}
+
++    asset_ids: list[str] = []
+
++
+
++    for resolved in sorted(resolved_map.keys()):
+
++        full = job_dir / resolved
+
++        b = full.read_bytes()
+
++        mime, _ = mimetypes.guess_type(full.name)
+
++        mime = mime or "application/octet-stream"
+
++        fo = _store(db, b, full.name, visibility, "import_md_asset", mime)
+
++        asset_ids.append(str(fo.id))
+
++        resolved_to_url[resolved] = f"/api/files/{fo.id}/download"
+
++
+
++    # helper: given url, return rewritten or None
+
++    def rewrite_url(url: str) -> str | None:
+
++        if not _is_local_ref(url):
+
++            return None
+
++        resolved = _resolve_zip_path(md_path_in_zip, url)
+
++        return resolved_to_url.get(resolved)
+
++
+
++    # rewrite inline images
+
++    def inline_sub(m: re.Match) -> str:
+
++        prefix, raw, suffix = m.group(1), m.group(2), m.group(3)
+
++        url, rest = _parse_inline_target(raw)
+
++        newu = rewrite_url(url)
+
++        if not newu:
+
++            return m.group(0)
+
++        new_raw = newu + ("" if rest == "" else " " + rest)
+
++        return prefix + new_raw + suffix
+
++
+
++    md_text2 = INLINE_IMG_RE.sub(inline_sub, md_text)
+
++
+
++    # rewrite html images
+
++    def html_sub(m: re.Match) -> str:
+
++        pre, q, url, q2 = m.group(1), m.group(2), m.group(3), m.group(4)
+
++        newu = rewrite_url(url)
+
++        if not newu:
+
++            return m.group(0)
+
++        return f"{pre}{q}{newu}{q2}"
+
++
+
++    md_text2 = HTML_IMG_RE.sub(html_sub, md_text2)
+
++
+
++    # rewrite reference definitions (only when value is local)
+
++    def def_sub(m: re.Match) -> str:
+
++        key = m.group(1).strip()
+
++        url = m.group(2).strip()
+
++        rest = m.group(3) or ""
+
++        newu = rewrite_url(url)
+
++        if not newu:
+
++            return m.group(0)
+
++        return f"[{key}]: {newu}{rest}"
+
++
+
++    md_text2 = REF_DEF_RE.sub(def_sub, md_text2)
+
++
+
++    return md_text2, asset_ids
+
++
+
++def _md_has_local_asset_refs(md_text: str) -> bool:
+
++    urls, _ = _collect_local_refs(md_text)
+
++    return len(urls) > 0
+
++
+
+ @router.post("")
+
+-def create(request: Request, db: Session=Depends(get_db), admin=Depends(get_current_admin),
+
+-           file: UploadFile=File(...), visibility: str=Form("private"), title: str|None=Form(None)):
+
+-    if visibility not in ("private","public"):
+
++def create(
+
++    request: Request,
+
++    db: Session = Depends(get_db),
+
++    admin=Depends(get_current_admin),
+
++    file: UploadFile = File(...),
+
++    visibility: str = Form("private"),
+
++    title: str | None = Form(None),
+
++    main_tex: str | None = Form(None),
+
++):
+
++    if visibility not in ("private", "public"):
+
+         raise HTTPException(status_code=400, detail="invalid_visibility")
+
+-    name=file.filename or "upload"
+
+-    data=file.file.read()
+
+-    ext=os.path.splitext(name.lower())[1]
+
+-    if ext==".md":
+
+-        md=data.decode("utf-8", errors="replace")
+
+-        fo=_store(db, data, name, visibility, "import_md", "text/markdown")
+
+-        a=ImportAsset(type="md", visibility=visibility, source_file_id=fo.id, rendered_file_id=None, title=title or name, content_md=md)
+
++    name = file.filename or "upload"
+
++    data = file.file.read()
+
++    ext = os.path.splitext(name.lower())[1]
+
++
+
++    if ext == ".md":
+
++        md = data.decode("utf-8", errors="replace")
+
++        if _md_has_local_asset_refs(md):
+
++            raise HTTPException(status_code=400, detail={"error":"md_contains_relative_assets", "hint":"upload a .zip (md + assets) for faithful import"})
+
++        fo = _store(db, data, name, visibility, "import_md", "text/markdown")
+
++        a = ImportAsset(type="md", visibility=visibility, source_file_id=fo.id, rendered_file_id=None, asset_file_ids=[], title=title or name, content_md=md)
+
+         db.add(a); db.commit(); db.refresh(a)
+
+         return _out(a)
+
+-    if ext==".docx":
+
+-        fo=_store(db, data, name, visibility, "import_docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+-        a=ImportAsset(type="docx", visibility=visibility, source_file_id=fo.id, rendered_file_id=None, title=title or name, content_md=None)
+
++
+
++    if ext == ".docx":
+
++        fo = _store(db, data, name, visibility, "import_docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
++        a = ImportAsset(type="docx", visibility=visibility, source_file_id=fo.id, rendered_file_id=None, asset_file_ids=[], title=title or name, content_md=None)
+
+         db.add(a); db.commit(); db.refresh(a)
+
+         return _out(a)
+
+-    if ext==".zip":
+
+-        zipfo=_store(db, data, name, visibility, "import_tex_zip", "application/zip")
+
++
+
++    if ext == ".zip":
+
++        # inspect zip content to decide tex vs md+assets
+
+         try:
+
+-            pdf=compile_tex_zip(data)
+
+-        except TexCompileError as e:
+
+-            raise HTTPException(status_code=400, detail={"error": str(e), "tail": e.tail})
+
+-        pdffo=_store(db, pdf, "compiled.pdf", visibility, "import_tex_pdf", "application/pdf")
+
+-        a=ImportAsset(type="tex", visibility=visibility, source_file_id=zipfo.id, rendered_file_id=pdffo.id, title=title or name, content_md=None)
+
+-        db.add(a); db.commit(); db.refresh(a)
+
+-        return _out(a)
+
++            with zipfile.ZipFile(io.BytesIO(data), "r") as zf:  # type: ignore
+
++                names = zf.namelist()
+
++        except Exception:
+
++            raise HTTPException(status_code=400, detail={"error":"invalid_zip"})
+
++
+
++        has_tex = any(n.lower().endswith(".tex") for n in names if not n.endswith("/"))
+
++        has_md = any(n.lower().endswith(".md") for n in names if not n.endswith("/"))
+
++
+
++        if has_tex:
+
++            zipfo = _store(db, data, name, visibility, "import_tex_zip", "application/zip")
+
++            try:
+
++                pdf = compile_tex_zip(data, main_tex=main_tex)
+
++            except TexCompileError as e:
+
++                detail = {"error": str(e), "tail": e.tail}
+
++                if getattr(e, "candidates", None):
+
++                    detail["candidates"] = e.candidates
+
++                    detail["hint"] = "pass form field main_tex=<path/to/file.tex> to choose"
+
++                raise HTTPException(status_code=400, detail=detail)
+
++            pdffo = _store(db, pdf, "compiled.pdf", visibility, "import_tex_pdf", "application/pdf")
+
++            a = ImportAsset(type="tex", visibility=visibility, source_file_id=zipfo.id, rendered_file_id=pdffo.id, asset_file_ids=[], title=title or name, content_md=None)
+
++            db.add(a); db.commit(); db.refresh(a)
+
++            return _out(a)
+
++
+
++        if has_md:
+
++            zipfo = _store(db, data, name, visibility, "import_md_zip", "application/zip")
+
++            # extract to tmp dir
+
++            root_tmp = os.path.join(settings.app_tmp_dir, "mdjobs")
+
++            os.makedirs(root_tmp, exist_ok=True)
+
++            job = tempfile.mkdtemp(prefix="job_", dir=root_tmp)
+
++            try:
+
++                zp = os.path.join(job, "src.zip")
+
++                with open(zp, "wb") as f:
+
++                    f.write(data)
+
++                with zipfile.ZipFile(zp, "r") as zf:
+
++                    zf.extractall(job)
+
++                    md_in_zip = _select_main_md(zf.namelist())
+
++                md_abs = Path(job) / md_in_zip
+
++                if not md_abs.exists():
+
++                    # extracted paths may differ when zip has top folder, fallback: search by basename
+
++                    cand = list(Path(job).rglob(posixpath.basename(md_in_zip)))
+
++                    if len(cand) == 1:
+
++                        md_abs = cand[0]
+
++                        # recompute md_in_zip relative to job
+
++                        md_in_zip = str(md_abs.relative_to(Path(job))).replace(os.sep, "/")
+
++                    else:
+
++                        raise HTTPException(status_code=400, detail={"error":"main_md_not_found_after_extract", "candidates": [str(p.relative_to(Path(job))) for p in cand]})
+
++                md_text = md_abs.read_text(encoding="utf-8", errors="replace")
+
++
+
++                rewritten_md, asset_ids = _rewrite_md_with_assets(db, Path(job), md_in_zip, md_text, visibility)
+
++                a = ImportAsset(type="md", visibility=visibility, source_file_id=zipfo.id, rendered_file_id=None, asset_file_ids=asset_ids, title=title or posixpath.basename(md_in_zip), content_md=rewritten_md)
+
++                db.add(a); db.commit(); db.refresh(a)
+
++                return _out(a)
+
++            finally:
+
++                try:
+
++                    shutil.rmtree(job)
+
++                except Exception:
+
++                    pass
+
++
+
++        raise HTTPException(status_code=400, detail={"error":"zip_contains_no_tex_or_md"})
+
++
+
+     raise HTTPException(status_code=400, detail="unsupported_file_type")
+
+ 
+
+ @router.get("")
+
+-def list_admin(db: Session=Depends(get_db), admin=Depends(get_current_admin)):
+
+-    items=db.execute(select(ImportAsset).order_by(ImportAsset.created_at.desc())).scalars().all()
+
++def list_admin(db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+
++    items = db.execute(select(ImportAsset).order_by(ImportAsset.created_at.desc())).scalars().all()
+
+     return [_out(a) for a in items]
+
+ 
+
+ @router.get("/{import_id}")
+
+-def get_admin(import_id: str, db: Session=Depends(get_db), admin=Depends(get_current_admin)):
+
+-    try: uid=uuid.UUID(import_id)
+
+-    except ValueError: raise HTTPException(status_code=400, detail="invalid_id")
+
+-    a=db.get(ImportAsset, uid)
+
+-    if not a: raise HTTPException(status_code=404, detail="not_found")
+
++def get_admin(import_id: str, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+
++    try:
+
++        uid = uuid.UUID(import_id)
+
++    except ValueError:
+
++        raise HTTPException(status_code=400, detail="invalid_id")
+
++    a = db.get(ImportAsset, uid)
+
++    if not a:
+
++        raise HTTPException(status_code=404, detail="not_found")
+
+     return _out(a)
+
+ 
+
+ @router.put("/{import_id}")
+
+-def update(import_id: str, payload: dict, db: Session=Depends(get_db), admin=Depends(get_current_admin)):
+
+-    try: uid=uuid.UUID(import_id)
+
+-    except ValueError: raise HTTPException(status_code=400, detail="invalid_id")
+
+-    a=db.get(ImportAsset, uid)
+
+-    if not a: raise HTTPException(status_code=404, detail="not_found")
+
++def update(import_id: str, payload: dict, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+
++    try:
+
++        uid = uuid.UUID(import_id)
+
++    except ValueError:
+
++        raise HTTPException(status_code=400, detail="invalid_id")
+
++    a = db.get(ImportAsset, uid)
+
++    if not a:
+
++        raise HTTPException(status_code=404, detail="not_found")
+
++
+
+     if payload.get("title") is not None:
+
+-        a.title=str(payload["title"])
+
++        a.title = str(payload["title"])
+
++
+
+     if payload.get("visibility") is not None:
+
+-        v=payload["visibility"]
+
+-        if v not in ("private","public"):
+
++        v = payload["visibility"]
+
++        if v not in ("private", "public"):
+
+             raise HTTPException(status_code=400, detail="invalid_visibility")
+
+-        a.visibility=v
+
+-        src=db.get(FileObject, a.source_file_id)
+
+-        if src:
+
+-            src.owner_scope=v; db.add(src)
+
+-        if a.rendered_file_id:
+
+-            r=db.get(FileObject, a.rendered_file_id)
+
+-            if r:
+
+-                r.owner_scope=v; db.add(r)
+
++        a.visibility = v
+
++
+
++        # update all linked file objects
+
++        for fid in [a.source_file_id, a.rendered_file_id]:
+
++            if not fid:
+
++                continue
+
++            fo = db.get(FileObject, fid)
+
++            if fo:
+
++                fo.owner_scope = v
+
++                db.add(fo)
+
++
+
++        for fid_str in (a.asset_file_ids or []):
+
++            try:
+
++                fid = uuid.UUID(fid_str)
+
++            except Exception:
+
++                continue
+
++            fo = db.get(FileObject, fid)
+
++            if fo:
+
++                fo.owner_scope = v
+
++                db.add(fo)
+
++
+
+     db.add(a); db.commit(); db.refresh(a)
+
+     return _out(a)
+
+ 
+
+ @router.delete("/{import_id}")
+
+-def delete(import_id: str, db: Session=Depends(get_db), admin=Depends(get_current_admin)):
+
+-    try: uid=uuid.UUID(import_id)
+
+-    except ValueError: raise HTTPException(status_code=400, detail="invalid_id")
+
+-    a=db.get(ImportAsset, uid)
+
+-    if not a: raise HTTPException(status_code=404, detail="not_found")
+
++def delete(import_id: str, db: Session = Depends(get_db), admin=Depends(get_current_admin)):
+
++    try:
+
++        uid = uuid.UUID(import_id)
+
++    except ValueError:
+
++        raise HTTPException(status_code=400, detail="invalid_id")
+
++    a = db.get(ImportAsset, uid)
+
++    if not a:
+
++        raise HTTPException(status_code=404, detail="not_found")
+
+     db.delete(a); db.commit()
+
+     return {"ok": True}
+
+ 
+
+ @router_public.get("/{import_id}")
+
+-def public_get(import_id: str, db: Session=Depends(get_db)):
+
+-    try: uid=uuid.UUID(import_id)
+
+-    except ValueError: raise HTTPException(status_code=400, detail="invalid_id")
+
+-    a=db.get(ImportAsset, uid)
+
+-    if not a or a.visibility!="public":
+
++def public_get(import_id: str, db: Session = Depends(get_db)):
+
++    try:
+
++        uid = uuid.UUID(import_id)
+
++    except ValueError:
+
++        raise HTTPException(status_code=400, detail="invalid_id")
+
++    a = db.get(ImportAsset, uid)
+
++    if not a or a.visibility != "public":
+
+         raise HTTPException(status_code=404, detail="not_found")
+
+     return _out(a)
+
+ 
+
+ @router_library.get("/{import_id}")
+
+-def library_get(import_id: str, request: Request, db: Session=Depends(get_db)):
+
+-    try: uid=uuid.UUID(import_id)
+
+-    except ValueError: raise HTTPException(status_code=400, detail="invalid_id")
+
+-    a=db.get(ImportAsset, uid)
+
++def library_get(import_id: str, request: Request, db: Session = Depends(get_db)):
+
++    try:
+
++        uid = uuid.UUID(import_id)
+
++    except ValueError:
+
++        raise HTTPException(status_code=400, detail="invalid_id")
+
++    a = db.get(ImportAsset, uid)
+
+     if not a:
+
+         raise HTTPException(status_code=404, detail="not_found")
+
+-    if a.visibility!="public":
+
++    if a.visibility != "public":
+
+         get_current_admin(request)
+
+     return _out(a)
+
+
+--- server/app/tex.py
++++ server/app/tex.py
+@@ -1,42 +1,102 @@
+ from __future__ import annotations
+
+ import os, shutil, subprocess, tempfile, zipfile
+
++from pathlib import Path
+
+ from .config import settings
+
+ 
+
+ class TexCompileError(Exception):
+
+-    def __init__(self, message: str, tail: str):
+
++    def __init__(self, message: str, tail: str = "", candidates: list[str] | None = None):
+
+         super().__init__(message)
+
+         self.tail = tail
+
++        self.candidates = candidates or []
+
+ 
+
+ def _tail(text: str, n: int) -> str:
+
+-    arr=text.splitlines()
+
++    arr = text.splitlines()
+
+     return "\n".join(arr[-n:])
+
+ 
+
+-def compile_tex_zip(zip_bytes: bytes) -> bytes:
+
+-    root=os.path.join(settings.app_tmp_dir, "texjobs")
+
++def _safe_relpath(p: str) -> str:
+
++    # zip paths are posix-like
+
++    p = p.replace("\\", "/").strip()
+
++    # disallow absolute or traversal
+
++    if p.startswith("/") or p.startswith("..") or "/.." in p:
+
++        raise TexCompileError("invalid_main_tex_path")
+
++    return p
+
++
+
++def _detect_main_tex(job_dir: Path, requested: str | None) -> Path:
+
++    # 1) backward compatibility: root main.tex
+
++    main_root = job_dir / "main.tex"
+
++    if main_root.exists():
+
++        return main_root
+
++
+
++    # 2) user requested
+
++    if requested:
+
++        rel = _safe_relpath(requested)
+
++        cand = job_dir / rel
+
++        if cand.exists() and cand.is_file() and cand.suffix.lower() == ".tex":
+
++            return cand
+
++        raise TexCompileError("requested_main_tex_not_found", candidates=[])
+
++
+
++    # 3) auto detect
+
++    tex_files = [p for p in job_dir.rglob("*.tex") if p.is_file()]
+
++    if len(tex_files) == 0:
+
++        raise TexCompileError("no_tex_files_found")
+
++
+
++    if len(tex_files) == 1:
+
++        return tex_files[0]
+
++
+
++    def looks_like_main(p: Path) -> bool:
+
++        try:
+
++            t = p.read_text(encoding="utf-8", errors="ignore")
+
++        except Exception:
+
++            return False
+
++        return ("\documentclass" in t) and ("\begin{document}" in t)
+
++
+
++    mains = [p for p in tex_files if looks_like_main(p)]
+
++    if len(mains) == 1:
+
++        return mains[0]
+
++
+
++    candidates = sorted([str(p.relative_to(job_dir)).replace("\\", "/") for p in (mains or tex_files)])
+
++    raise TexCompileError("main_tex_ambiguous", tail="", candidates=candidates)
+
++
+
++def compile_tex_zip(zip_bytes: bytes, main_tex: str | None = None) -> bytes:
+
++    root = os.path.join(settings.app_tmp_dir, "texjobs")
+
+     os.makedirs(root, exist_ok=True)
+
+-    job=tempfile.mkdtemp(prefix="job_", dir=root)
+
++    job = tempfile.mkdtemp(prefix="job_", dir=root)
+
+     try:
+
+-        zp=os.path.join(job, "src.zip")
+
++        zp = os.path.join(job, "src.zip")
+
+         with open(zp, "wb") as f:
+
+             f.write(zip_bytes)
+
++
+
+         with zipfile.ZipFile(zp, "r") as zf:
+
+             zf.extractall(job)
+
+-        main=os.path.join(job, "main.tex")
+
+-        if not os.path.exists(main):
+
+-            raise TexCompileError("main.tex not found", "")
+
+-        proc=subprocess.run(
+
+-            ["latexmk","-pdf","-interaction=nonstopmode","-halt-on-error","main.tex"],
+
+-            cwd=job, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+
+-            timeout=settings.tex_compile_timeout_seconds, text=True
+
++
+
++        job_dir = Path(job)
+
++        main_path = _detect_main_tex(job_dir, main_tex)
+
++        rel_main = str(main_path.relative_to(job_dir)).replace("\\", "/")
+
++
+
++        proc = subprocess.run(
+
++            ["latexmk", "-pdf", "-interaction=nonstopmode", "-halt-on-error", rel_main],
+
++            cwd=job,
+
++            stdout=subprocess.PIPE,
+
++            stderr=subprocess.STDOUT,
+
++            text=True,
+
++            timeout=settings.tex_compile_timeout_seconds
+
+         )
+
+-        out=proc.stdout or ""
+
+-        if proc.returncode!=0:
+
+-            raise TexCompileError("latexmk failed", _tail(out, settings.tex_log_tail_lines))
+
+-        pdf=os.path.join(job, "main.pdf")
+
+-        if not os.path.exists(pdf):
+
+-            raise TexCompileError("PDF not produced", _tail(out, settings.tex_log_tail_lines))
+
+-        return (__import__('pathlib').Path)(pdf).read_bytes()
+
++        out = proc.stdout or ""
+
++        if proc.returncode != 0:
+
++            raise TexCompileError("latexmk_failed", tail=_tail(out, settings.tex_log_tail_lines))
+
++
+
++        pdf_path = main_path.with_suffix(".pdf")
+
++        if not pdf_path.exists():
+
++            # latexmk may output to cwd with base name
+
++            pdf_path = job_dir / (main_path.stem + ".pdf")
+
++        if not pdf_path.exists():
+
++            raise TexCompileError("pdf_not_found_after_compile", tail=_tail(out, settings.tex_log_tail_lines))
+
++
+
++        return pdf_path.read_bytes()
+
+     except subprocess.TimeoutExpired as e:
+
+-        raise TexCompileError("latexmk timeout", _tail((e.stdout or "") + "\n" + (e.stderr or ""), settings.tex_log_tail_lines))
+
++        raise TexCompileError("latexmk_timeout", tail=_tail((e.stdout or "") + "\n" + (e.stderr or ""), settings.tex_log_tail_lines))
+
+     finally:
+
+-        shutil.rmtree(job, ignore_errors=True)
+
++        try:
+
++            shutil.rmtree(job)
+
++        except Exception:
+
++            pass
+
+
+--- server/requirements.txt
++++ server/requirements.txt
+@@ -9,3 +9,4 @@
+ boto3==1.34.155
+
+ PyJWT==2.9.0
+
+ httpx==0.27.0
+
++pypdf==4.3.1
+
+
+--- web/Dockerfile
++++ web/Dockerfile
+@@ -2,8 +2,11 @@
+ WORKDIR /app
+
+ ENV NEXT_TELEMETRY_DISABLED=1
+
+ COPY package.json /app/package.json
+
++COPY scripts /app/scripts
+
+ RUN npm install --no-audit --no-fund
+
+ COPY . /app
+
++# ensure pdfjs assets exist in public/ after source overlay
+
++RUN node scripts/copy-pdfjs.mjs
+
+ RUN npm run build
+
+ 
+
+ FROM node:20-bookworm-slim AS runner
+
+
+--- web/app/viewer/pdf/[id]/page.tsx
++++ web/app/viewer/pdf/[id]/page.tsx
+@@ -1,31 +1,38 @@
+-'use client';
+
+-import React,{useEffect,useRef,useState} from 'react';
+
+-// @ts-ignore
+
+-import * as pdfjsLib from 'pdfjs-dist/build/pdf';
+
+-// @ts-ignore
+
+-import pdfWorker from 'pdfjs-dist/build/pdf.worker.entry';
+
+-(pdfjsLib as any).GlobalWorkerOptions.workerSrc = pdfWorker;
+
++import { cookies } from 'next/headers';
+
+ 
+
+-export default function Pdf({params}:{params:{id:string}}){
+
+-  const canvasRef=useRef<HTMLCanvasElement|null>(null);
+
+-  const [err,setErr]=useState<string|null>(null);
+
+-  useEffect(()=>{ (async ()=>{
+
+-    setErr(null);
+
+-    const url=`/api/files/${params.id}/download`;
+
+-    const task=(pdfjsLib as any).getDocument({url,withCredentials:true});
+
+-    const pdf=await task.promise;
+
+-    const page=await pdf.getPage(1);
+
+-    const viewport=page.getViewport({scale:1.2});
+
+-    const canvas=canvasRef.current; if(!canvas) return;
+
+-    const ctx=canvas.getContext('2d'); if(!ctx) return;
+
+-    canvas.width=Math.floor(viewport.width);
+
+-    canvas.height=Math.floor(viewport.height);
+
+-    await page.render({canvasContext:ctx,viewport}).promise;
+
+-  })().catch(e=>setErr(e?.message||'render failed'));
+
+-  },[params.id]);
+
+-  return <div className="card">
+
+-    <h1>PDF Viewer</h1>
+
+-    {err? <p>❌ {err}</p>:null}
+
+-    <canvas ref={canvasRef} style={{width:'100%',height:'auto'}}/>
+
+-  </div>;
+
++async function getSignedUrl(id: string): Promise<string> {
+
++  const base = process.env.SERVER_API_BASE_URL || '';
+
++  const cookieHeader = cookies().toString();
+
++  // try mint a short-lived token url (works when logged in)
+
++  try {
+
++    const res = await fetch(`${base}/api/files/${encodeURIComponent(id)}/token`, {
+
++      method: 'POST',
+
++      headers: {
+
++        cookie: cookieHeader,
+
++        'Content-Type': 'application/x-www-form-urlencoded',
+
++      },
+
++      body: '',
+
++      cache: 'no-store',
+
++    });
+
++    if (res.ok) {
+
++      const j = (await res.json()) as any;
+
++      if (j.download_url_with_token) return j.download_url_with_token;
+
++      if (j.download_url) return j.download_url;
+
++    }
+
++  } catch {
+
++    // ignore
+
++  }
+
++  return `/api/files/${encodeURIComponent(id)}/download`;
+
+ }
+
++
+
++export default async function PdfViewerPage({ params }: { params: { id: string } }) {
+
++  const id = params.id;
+
++  const fileUrl = await getSignedUrl(id);
+
++  const viewerSrc = `/pdfjs/web/viewer.html?file=${encodeURIComponent(fileUrl)}`;
+
++
+
++  return (
+
++    <div style={{ height: '100vh', width: '100vw' }}>
+
++      <iframe title="PDF.js Viewer" src={viewerSrc} style={{ border: 'none', width: '100%', height: '100%' }} />
+
++    </div>
+
++  );
+
++}
+
+
+--- web/package.json
++++ web/package.json
+@@ -6,7 +6,8 @@
+   "scripts": {
+
+     "dev": "next dev -p 3000",
+
+     "build": "next build",
+
+-    "start": "next start -p 3000"
+
++    "start": "next start -p 3000",
+
++    "postinstall": "node scripts/copy-pdfjs.mjs"
+
+   },
+
+   "dependencies": {
+
+     "@codemirror/commands": "6.6.2",
+
+@@ -29,4 +30,4 @@
+     "@types/react-dom": "18.3.0",
+
+     "typescript": "5.5.4"
+
+   }
+
+-}
++}
