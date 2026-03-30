@@ -84,7 +84,7 @@ services:
 
   web:
     build:
-      context: ../web
+      context: ..
     environment:
       SERVER_API_BASE_URL: ${SERVER_API_BASE_URL}
     depends_on:

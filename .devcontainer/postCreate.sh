@@ -17,7 +17,7 @@ fi
 
 # Node deps (web)
 if [ -f web/package.json ]; then
-  cd web
+  cd /workspaces/folio
   if [ -f package-lock.json ]; then
     npm ci --no-audit --no-fund
   else
