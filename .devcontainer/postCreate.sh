@@ -2,22 +2,27 @@
 set -euo pipefail
 
 echo "[devcontainer] Preparing environment (python + node)..."
-cd /workspace/project
+
+PROJECT_ROOT="/workspaces/folio"
+cd "$PROJECT_ROOT"
 
 # Ensure basic tools
 sudo apt-get update -y >/dev/null
 sudo apt-get install -y --no-install-recommends curl jq unzip ca-certificates >/dev/null
 
-# Python deps (server)
+# Ensure app data directories exist
+mkdir -p /home/codespace/.local/share/folio/tmp
+mkdir -p /home/codespace/.local/share/folio/logs
+
+# Python deps
 if [ -f server/requirements.txt ]; then
   python -m pip install --upgrade pip >/dev/null
   pip install -r server/requirements.txt >/dev/null
   echo "[devcontainer] Python deps installed."
 fi
 
-# Node deps (web)
-if [ -f web/package.json ]; then
-  cd /workspaces/folio
+# Node deps
+if [ -f package.json ]; then
   if [ -f package-lock.json ]; then
     npm ci --no-audit --no-fund
   else

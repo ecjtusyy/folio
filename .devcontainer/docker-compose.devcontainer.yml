@@ -6,15 +6,15 @@ services:
     init: true
     command: sleep infinity
     volumes:
-      - ..:/workspace/project:cached
+      - ..:/workspaces/folio:cached
       - /var/run/docker.sock:/var/run/docker.sock
-      - dev_pip_cache:/home/vscode/.cache/pip
-      - dev_npm_cache:/home/vscode/.npm
+      - dev_pip_cache:/home/codespace/.cache/pip
+      - dev_npm_cache:/home/codespace/.npm
     environment:
-      - APP_DATA_DIR=/mnt/d/app-data
-      - APP_TMP_DIR=/mnt/d/app-data/tmp
-      - APP_LOG_DIR=/mnt/d/app-data/logs
-    working_dir: /workspace/project
+      - APP_DATA_DIR=/home/codespace/.local/share/folio
+      - APP_TMP_DIR=/home/codespace/.local/share/folio/tmp
+      - APP_LOG_DIR=/home/codespace/.local/share/folio/logs
+    working_dir: /workspaces/folio
 
 volumes:
   dev_pip_cache:
