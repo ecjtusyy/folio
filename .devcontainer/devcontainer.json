@@ -25,6 +25,6 @@
   "runServices": [
     "dev"
   ],
-  "remoteUser": "codespace",
-  "containerUser": "codespace"
+  "remoteUser": "root",
+  "containerUser": "root"
 }
