@@ -23,12 +23,23 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     volumes:
       - ${APP_DATA_DIR}/minio:/data
-    ports:
-      - "9001:9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
       interval: 3s
       timeout: 3s
+      retries: 30
+
+  onlyoffice:
+    build:
+      context: ./onlyoffice
+    environment:
+      JWT_ENABLED: "false"
+    volumes:
+      - ${APP_DATA_DIR}/onlyoffice:/var/lib/onlyoffice
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/healthcheck"]
+      interval: 5s
+      timeout: 5s
       retries: 30
 
   server:
@@ -55,12 +66,12 @@ services:
       - ${APP_DATA_DIR}/tmp:/app-data/tmp
       - ${APP_DATA_DIR}/logs:/app-data/logs
       - ${CACHE_DIR}/pip:/root/.cache/pip
-    ports:
-      - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
       minio:
+        condition: service_healthy
+      onlyoffice:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
@@ -76,13 +87,25 @@ services:
     depends_on:
       server:
         condition: service_healthy
-    ports:
-      - "3000:3000"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/"]
       interval: 5s
       timeout: 5s
       retries: 30
+
+  caddy:
+    build:
+      context: .
+      dockerfile: caddy.Dockerfile
+    ports:
+      - "${CADDY_HTTP_PORT:-3000}:80"
+    depends_on:
+      server:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+      onlyoffice:
+        condition: service_healthy
 
 volumes:
   postgres_data:

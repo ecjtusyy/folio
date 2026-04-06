@@ -26,5 +26,12 @@
     "dev"
   ],
   "remoteUser": "root",
-  "containerUser": "root"
+  "containerUser": "root",
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": {
+      "label": "web-entry",
+      "onAutoForward": "openPreview"
+    }
+  }
 }

@@ -8,12 +8,12 @@ services:
     volumes:
       - ..:/workspaces/folio:cached
       - /var/run/docker.sock:/var/run/docker.sock
-      - dev_pip_cache:/home/codespace/.cache/pip
-      - dev_npm_cache:/home/codespace/.npm
+      - dev_pip_cache:/root/.cache/pip
+      - dev_npm_cache:/root/.npm
     environment:
-      - APP_DATA_DIR=/home/codespace/.local/share/folio
-      - APP_TMP_DIR=/home/codespace/.local/share/folio/tmp
-      - APP_LOG_DIR=/home/codespace/.local/share/folio/logs
+      - APP_DATA_DIR=/root/.local/share/folio
+      - APP_TMP_DIR=/root/.local/share/folio/tmp
+      - APP_LOG_DIR=/root/.local/share/folio/logs
     working_dir: /workspaces/folio
 
 volumes:
