@@ -1,0 +1,1 @@
+export default function CvPage(){return <section className="page-shell"><p className="eyebrow">Cv</p><h1 className="page-title">Cv</h1><p className="page-lead">This is the public cv page of the static personal site. Replace this text with your final content.</p></section>}

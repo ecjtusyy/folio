@@ -1,18 +1,51 @@
-# Monorepo Notes + Blog + Imports (M1/M2/M3)
+# folio — GitHub Pages static personal site
 
-## Quick Start (WSL2)
+Expected Pages URL: `https://ecjtusyy.github.io/folio/`
+
+## Local development
 
 ```bash
-mkdir -p /mnt/d/app-data /mnt/d/app-data/tmp /mnt/d/app-data/logs
-mkdir -p /mnt/d/cache/pip /mnt/d/cache/npm
-
-cp deploy/.env.example deploy/.env
-
-bash deploy/up.sh
-bash deploy/verify_all.sh
+npm install
+npm run dev
 ```
 
-## URLs
-- Web: http://localhost
-- API health: http://localhost/api/health
-- OnlyOffice health: http://localhost/onlyoffice/healthcheck
+Open `http://localhost:3000/folio/`.
+
+## Build the static site
+
+```bash
+npm ci
+npx tsc --noEmit
+npm run build
+```
+
+The static export is written to `out/`.
+
+## Content maintenance workflow
+
+### Add a new post
+
+1. Create a markdown file in `content/posts/`.
+2. Use the file name as the slug.
+3. Add `title`, `date`, `slug`, `summary`, and optional `tags` frontmatter.
+4. Push to `main`; GitHub Actions publishes automatically.
+
+### Add papers / PDFs / images
+
+- Put static assets under `public/`.
+- Use `public/papers/` for PDFs when the papers section is expanded.
+
+## Deployment
+
+GitHub Pages source should be set to **GitHub Actions**. The workflow file is `.github/workflows/deploy-pages.yml`.
+
+## Project site path notes
+
+This repository is a project site. Keep `/folio/` via `basePath: '/folio'`.
+
+## Common problems
+
+- Asset 404 on Pages: verify `basePath: '/folio'`.
+- Image export errors: keep `images.unoptimized: true`.
+- Dynamic route export errors: every dynamic route must have `generateStaticParams()`.
+- Public pages must not use `/api/`, `cookies()`, `headers()`, `draftMode()`, or runtime backend URLs.

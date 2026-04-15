@@ -1,0 +1,1 @@
+export default function AboutPage(){return <section className="page-shell"><p className="eyebrow">About</p><h1 className="page-title">About</h1><p className="page-lead">This is the public about page of the static personal site. Replace this text with your final content.</p></section>}

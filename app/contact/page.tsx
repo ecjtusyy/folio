@@ -1,0 +1,1 @@
+export default function ContactPage(){return <section className="page-shell"><p className="eyebrow">Contact</p><h1 className="page-title">Contact</h1><p className="page-lead">This is the public contact page of the static personal site. Replace this text with your final content.</p></section>}

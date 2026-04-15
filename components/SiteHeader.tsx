@@ -1,0 +1,3 @@
+import Link from 'next/link';
+const navItems = [{ href: '/about', label: 'About' }, { href: '/posts', label: 'Posts' }, { href: '/papers', label: 'Research' }, { href: '/projects', label: 'Projects' }, { href: '/cv', label: 'CV' }, { href: '/contact', label: 'Contact' }];
+export default function SiteHeader(){return <header className="site-header"><div className="container header-inner"><Link href="/" className="brand">SYY</Link><nav className="site-nav" aria-label="Primary">{navItems.map((item)=><Link key={item.href} href={item.href} className="nav-link">{item.label}</Link>)}</nav></div></header>}

@@ -1,0 +1,1 @@
+export default function ProjectsPage(){return <section className="page-shell"><p className="eyebrow">Projects</p><h1 className="page-title">Projects</h1><p className="page-lead">This is the public projects page of the static personal site. Replace this text with your final content.</p></section>}

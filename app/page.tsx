@@ -1,14 +1,3 @@
 import Link from 'next/link';
-export default function Page(){
-  return <div className="card">
-    <h1>Monorepo Demo</h1>
-    <ul>
-      <li><Link href="/login">/login</Link></li>
-      <li><Link href="/notes">/notes</Link></li>
-      <li><Link href="/posts">/posts</Link></li>
-      <li><Link href="/admin/posts">/admin/posts</Link></li>
-      <li><Link href="/imports">/imports</Link></li>
-    </ul>
-    <p>Health: <a href="/api/health">/api/health</a></p>
-  </div>;
-}
+const sections=[{title:'About',description:'Personal profile, research interests, and contact information.',href:'/about'},{title:'Posts',description:'Technical notes, study logs, and long-form writing.',href:'/posts'},{title:'Research',description:'Research papers, preprints, and publication records.',href:'/papers'},{title:'Projects',description:'Selected repositories, experiments, and academic software work.',href:'/projects'}];
+export default function HomePage(){return <><section className="hero"><p className="eyebrow">Personal Website</p><h1 className="hero-title">SYY</h1><p className="hero-text">A static personal site for profile, writing, papers, and projects, prepared for GitHub Pages deployment.</p><div className="hero-actions"><Link href="/about" className="button primary">Enter Site</Link><Link href="/papers" className="button secondary">View Research</Link></div></section><section className="section-grid">{sections.map((section)=><article key={section.href} className="panel"><h2>{section.title}</h2><p>{section.description}</p><Link href={section.href} className="text-link">Open →</Link></article>)}</section></>}

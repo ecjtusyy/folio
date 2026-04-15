@@ -1,0 +1,1 @@
+export default function PapersPage(){return <section className="page-shell"><p className="eyebrow">Papers</p><h1 className="page-title">Papers</h1><p className="page-lead">This is the public papers page of the static personal site. Replace this text with your final content.</p></section>}
