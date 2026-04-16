@@ -1,0 +1,6 @@
+node_modules/
+.next/
+out/
+tsconfig.tsbuildinfo
+package-lock.json.bak
+npm-debug.log*
